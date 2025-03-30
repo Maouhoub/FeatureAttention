@@ -66,14 +66,16 @@ class TransformerBlock(nn.Module):
 
 
 # Vision Transformer for Super-Resolution
+# Vision Transformer for Super-Resolution
 class ViTSR(nn.Module):
     def __init__(self, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim, upscale_factor):
         super().__init__()
         self.feature_extractor = FeatureExtractor(in_channels, embed_dim, patch_size)
         self.transformer = nn.Sequential(*[TransformerBlock(embed_dim, num_heads, mlp_dim) for _ in range(depth)])
+        total_upscale = patch_size * upscale_factor  # Calculate total upscale factor
         self.upsample = nn.Sequential(
-            nn.Conv2d(embed_dim, embed_dim * (upscale_factor ** 2), kernel_size=3, padding=1),
-            nn.PixelShuffle(upscale_factor),
+            nn.Conv2d(embed_dim, embed_dim * (total_upscale ** 2), kernel_size=3, padding=1),
+            nn.PixelShuffle(total_upscale),
             nn.Conv2d(embed_dim, in_channels, kernel_size=3, padding=1)
         )
 
@@ -86,8 +88,6 @@ class ViTSR(nn.Module):
         x = x.permute(1, 2, 0).reshape(B, C, H, W)
         x = self.upsample(x)
         return x
-
-
 # Training Setup with Early Stopping
 def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim,
                 upscale_factor):
