@@ -12,24 +12,26 @@ import argparse
 
 # Custom Dataset
 class SRDataset(Dataset):
-    def __init__(self, lr_dir, hr_dir, transform=None):
+    def __init__(self, lr_dir, hr_dir, upscale_factor, transform_lr=None, transform_hr=None):
         self.lr_dir = lr_dir
         self.hr_dir = hr_dir
-        self.transform = transform
-        self.hr_filenames = sorted(os.listdir(hr_dir))
-        self.lr_filenames = sorted(os.listdir(lr_dir))
+        self.upscale_factor = upscale_factor
+        self.transform_lr = transform_lr
+        self.transform_hr = transform_hr
+        self.filenames = sorted(os.listdir(lr_dir))
 
     def __len__(self):
-        return len(self.hr_filenames)
+        return len(self.filenames)
 
     def __getitem__(self, idx):
-        lr_path = os.path.join(self.lr_dir, self.lr_filenames[idx])
-        hr_path = os.path.join(self.hr_dir, self.hr_filenames[idx])
+        lr_path = os.path.join(self.lr_dir, self.filenames[idx])
+        hr_path = os.path.join(self.hr_dir, self.filenames[idx])
         lr_img = Image.open(lr_path).convert("RGB")
         hr_img = Image.open(hr_path).convert("RGB")
-        if self.transform:
-            lr_img = self.transform(lr_img)
-            hr_img = self.transform(hr_img)
+        if self.transform_lr:
+            lr_img = self.transform_lr(lr_img)
+        if self.transform_hr:
+            hr_img = self.transform_hr(hr_img)
         return lr_img, hr_img
 
 
@@ -93,12 +95,17 @@ def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, pa
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     criterion = nn.L1Loss()
 
-    transform = transforms.Compose([
+    lr_transform = transforms.Compose([
+        transforms.Resize((128 // upscale_factor, 128 // upscale_factor)),
+        transforms.ToTensor()
+    ])
+
+    hr_transform = transforms.Compose([
         transforms.Resize((128, 128)),
         transforms.ToTensor()
     ])
 
-    dataset = SRDataset(lr_dir, hr_dir, transform)
+    dataset = SRDataset(lr_dir, hr_dir, upscale_factor, lr_transform, hr_transform)
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
@@ -116,6 +123,7 @@ def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, pa
             lr_imgs, hr_imgs = lr_imgs.to(device), hr_imgs.to(device)
             optimizer.zero_grad()
             output = model(lr_imgs)
+            assert output.shape == hr_imgs.shape, f"Shape mismatch! Output: {output.shape}, HR: {hr_imgs.shape}"
             loss = criterion(output, hr_imgs)
             loss.backward()
             optimizer.step()
@@ -160,7 +168,6 @@ if __name__ == "__main__":
     parser.add_argument("--mlp_dim", type=int, default=128, help="MLP hidden layer dimension")
     parser.add_argument("--upscale_factor", type=int, default=2, help="Upscaling factor")
     args = parser.parse_args()
-    print(args)
+
     train_model(args.lr_dir, args.hr_dir, args.epochs, args.patience, 3, args.embed_dim, args.patch_size,
                 args.num_heads, args.depth, args.mlp_dim, args.upscale_factor)
-
