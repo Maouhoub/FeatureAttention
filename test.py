@@ -7,8 +7,7 @@ from PIL import Image
 import numpy as np
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
-
-from model import ViTSR
+import argparse
 
 
 # Load trained model
@@ -95,5 +94,13 @@ def test_model(model_path, lr_dir, hr_dir, upscale_factor):
     evaluate(model, test_loader, device)
 
 
-# Run the test
-test_model("./best_model.pth", "path_to_lr_test", "path_to_hr_test", 2)
+# Main
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_path", type=str, required=True, help="Path to the trained model")
+    parser.add_argument("--lr_dir", type=str, required=True, help="Path to low-resolution images")
+    parser.add_argument("--hr_dir", type=str, required=True, help="Path to high-resolution images")
+    parser.add_argument("--upscale_factor", type=int, default=2, help="Upscaling factor")
+    args = parser.parse_args()
+
+    test_model(args.model_path, args.lr_dir, args.hr_dir, args.upscale_factor)
