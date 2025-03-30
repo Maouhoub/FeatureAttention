@@ -159,6 +159,7 @@ if __name__ == "__main__":
     parser.add_argument("--mlp_dim", type=int, default=128, help="MLP hidden layer dimension")
     parser.add_argument("--upscale_factor", type=int, default=2, help="Upscaling factor")
     args = parser.parse_args()
-
+    print(args)
     train_model(args.lr_dir, args.hr_dir, args.epochs, args.patience, 3, args.embed_dim, args.patch_size,
                 args.num_heads, args.depth, args.mlp_dim, args.upscale_factor)
+
