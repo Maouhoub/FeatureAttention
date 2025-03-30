@@ -1,10 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
+import numpy as np
 from PIL import Image
 import os
+import argparse
 
 
 # Custom Dataset
@@ -36,7 +39,7 @@ class FeatureExtractor(nn.Module):
         self.conv = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
-        return self.conv(x)  # Output: (B, embed_dim, H/patch_size, W/patch_size)
+        return self.conv(x)
 
 
 # Transformer Encoder Block
@@ -71,12 +74,12 @@ class ViTSR(nn.Module):
         )
 
     def forward(self, x):
-        x = self.feature_extractor(x)  # (B, C, H//P, W//P)
+        x = self.feature_extractor(x)
         B, C, H, W = x.shape
-        x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)  # Convert feature maps into tokens (B, H*W, C)
-        x = x.permute(1, 0, 2)  # Reshape to (H*W, B, C) for transformer
+        x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
+        x = x.permute(1, 0, 2)
         x = self.transformer(x)
-        x = x.permute(1, 2, 0).reshape(B, C, H, W)  # Reshape back to (B, C, H, W)
+        x = x.permute(1, 2, 0).reshape(B, C, H, W)
         x = self.upsample(x)
         return x
 
@@ -134,7 +137,7 @@ def train_model(lr_dir, hr_dir, num_epochs=50, patience=5):
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            torch.save(model.state_dict(), "best_model.pth")  # Save best model
+            torch.save(model.state_dict(), "best_model.pth")
         else:
             patience_counter += 1
             if patience_counter >= patience:
@@ -143,4 +146,11 @@ def train_model(lr_dir, hr_dir, num_epochs=50, patience=5):
 
 
 if __name__ == "__main__":
-    train_model("path_to_lr_images", "path_to_hr_images")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lr_dir", type=str, required=True, help="Path to low-resolution images")
+    parser.add_argument("--hr_dir", type=str, required=True, help="Path to high-resolution images")
+    parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
+    parser.add_argument("--patience", type=int, default=5, help="Early stopping patience")
+    args = parser.parse_args()
+
+    train_model(args.lr_dir, args.hr_dir, args.epochs, args.patience)
