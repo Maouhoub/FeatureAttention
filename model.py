@@ -118,6 +118,7 @@ def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, pa
     patience_counter = 0
 
     for epoch in range(num_epochs):
+        print("epoch : ", epoch)
         model.train()
         train_loss = 0.0
         for lr_imgs, hr_imgs in train_loader:
