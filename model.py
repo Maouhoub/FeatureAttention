@@ -34,7 +34,7 @@ class SRDataset(Dataset):
 
 # Feature extraction using CNN (kernel_size = stride = patch_size)
 class FeatureExtractor(nn.Module):
-    def __init__(self, in_channels=3, embed_dim=64, patch_size=4):
+    def __init__(self, in_channels, embed_dim, patch_size):
         super().__init__()
         self.conv = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
 
@@ -63,7 +63,7 @@ class TransformerBlock(nn.Module):
 
 # Vision Transformer for Super-Resolution
 class ViTSR(nn.Module):
-    def __init__(self, in_channels=3, embed_dim=64, patch_size=4, num_heads=4, depth=6, mlp_dim=128, upscale_factor=2):
+    def __init__(self, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim, upscale_factor):
         super().__init__()
         self.feature_extractor = FeatureExtractor(in_channels, embed_dim, patch_size)
         self.transformer = nn.Sequential(*[TransformerBlock(embed_dim, num_heads, mlp_dim) for _ in range(depth)])
@@ -85,9 +85,10 @@ class ViTSR(nn.Module):
 
 
 # Training Setup with Early Stopping
-def train_model(lr_dir, hr_dir, num_epochs=50, patience=5):
+def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim,
+                upscale_factor):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = ViTSR().to(device)
+    model = ViTSR(in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim, upscale_factor).to(device)
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     criterion = nn.L1Loss()
 
@@ -151,6 +152,13 @@ if __name__ == "__main__":
     parser.add_argument("--hr_dir", type=str, required=True, help="Path to high-resolution images")
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
     parser.add_argument("--patience", type=int, default=5, help="Early stopping patience")
+    parser.add_argument("--patch_size", type=int, default=4, help="Patch size for feature extraction")
+    parser.add_argument("--embed_dim", type=int, default=64, help="Embedding dimension")
+    parser.add_argument("--num_heads", type=int, default=4, help="Number of attention heads")
+    parser.add_argument("--depth", type=int, default=6, help="Number of transformer layers")
+    parser.add_argument("--mlp_dim", type=int, default=128, help="MLP hidden layer dimension")
+    parser.add_argument("--upscale_factor", type=int, default=2, help="Upscaling factor")
     args = parser.parse_args()
 
-    train_model(args.lr_dir, args.hr_dir, args.epochs, args.patience)
+    train_model(args.lr_dir, args.hr_dir, args.epochs, args.patience, 3, args.embed_dim, args.patch_size,
+                args.num_heads, args.depth, args.mlp_dim, args.upscale_factor)
