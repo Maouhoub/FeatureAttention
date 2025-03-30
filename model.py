@@ -93,7 +93,7 @@ def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, pa
                 upscale_factor):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ViTSR(in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim, upscale_factor).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
     criterion = nn.L1Loss()
 
     lr_transform = transforms.Compose([
