@@ -9,6 +9,8 @@ from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
 import argparse
 
+from model import ViTSR
+
 
 # Load trained model
 def load_model(model_path, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim, upscale_factor):
