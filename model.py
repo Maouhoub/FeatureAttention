@@ -18,15 +18,14 @@ class SRDataset(Dataset):
         self.upscale_factor = upscale_factor
         self.transform_lr = transform_lr
         self.transform_hr = transform_hr
-        self.lr_filenames = sorted(os.listdir(lr_dir))
-        self.hr_filenames = sorted(os.listdir(hr_dir))
+        self.filenames = sorted(os.listdir(lr_dir))
 
     def __len__(self):
-        return len(self.hr_filenames)
+        return len(self.filenames)
 
     def __getitem__(self, idx):
-        lr_path = os.path.join(self.lr_dir, self.lr_filenames[idx])
-        hr_path = os.path.join(self.hr_dir, self.hr_filenames[idx])
+        lr_path = os.path.join(self.lr_dir, self.filenames[idx])
+        hr_path = os.path.join(self.hr_dir, self.filenames[idx])
         lr_img = Image.open(lr_path).convert("RGB")
         hr_img = Image.open(hr_path).convert("RGB")
         if self.transform_lr:
