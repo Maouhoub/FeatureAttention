@@ -63,7 +63,7 @@ def evaluate(model, dataloader, device):
                 sr_img_np = sr_imgs[i].permute(1, 2, 0).cpu().numpy()
 
                 psnr_value = psnr(hr_img_np, sr_img_np, data_range=1.0)
-                ssim_value = ssim(hr_img_np, sr_img_np, data_range=1.0, multichannel=True)
+                ssim_value = ssim(hr_img_np, sr_img_np, data_range=1.0, channel_axis=-1, win_size=5)
 
                 total_psnr += psnr_value
                 total_ssim += ssim_value
