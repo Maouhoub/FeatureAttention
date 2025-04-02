@@ -1,10 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
-import numpy as np
 from PIL import Image
 import os
 import argparse
