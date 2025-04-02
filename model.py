@@ -83,6 +83,20 @@ class ViTSR(nn.Module):
         x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
         x = x.permute(1, 0, 2)
         x = self.transformer(x)
+
+        x = self.feature_extractor(x)
+        B, C, H, W = x.shape
+        x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
+        x = x.permute(1, 0, 2)
+        x = self.transformer(x)
+
+        x = self.feature_extractor(x)
+        B, C, H, W = x.shape
+        x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
+        x = x.permute(1, 0, 2)
+        x = self.transformer(x)
+
+
         x = x.permute(1, 2, 0).reshape(B, C, H, W)
         x = self.upsample(x)
         return x
