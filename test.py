@@ -78,7 +78,7 @@ def evaluate(model, dataloader, device):
 
 # Testing
 def test_model(model_path, lr_dir, hr_dir, upscale_factor):
-    model, device = load_model(model_path, 3, 64, 4, 4, 1, 128, upscale_factor)
+    model, device = load_model(model_path, 3, 64, 4, 4, 2, 128, upscale_factor)
 
     lr_transform = transforms.Compose([
         transforms.Resize((128 // upscale_factor, 128 // upscale_factor)),
