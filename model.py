@@ -8,7 +8,6 @@ import os
 import argparse
 
 
-# Custom Dataset
 class SRDataset(Dataset):
     def __init__(self, lr_dir, hr_dir, upscale_factor, transform_lr=None, transform_hr=None):
         self.lr_dir = lr_dir
@@ -34,7 +33,6 @@ class SRDataset(Dataset):
         return lr_img, hr_img
 
 
-# Feature extraction using CNN (kernel_size = stride = patch_size)
 class FeatureExtractor(nn.Module):
     def __init__(self, in_channels, embed_dim, patch_size):
         super().__init__()
@@ -44,7 +42,6 @@ class FeatureExtractor(nn.Module):
         return self.conv(x)
 
 
-# Transformer Encoder Block
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim, num_heads, mlp_dim):
         super().__init__()
@@ -58,42 +55,74 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x):
-        print("transformer block in : ", x.shape)
-        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
+        x = x.permute(1, 0, 2)  # (seq_len, batch, embed_dim) for attention
+        attn_output, _ = self.attn(self.norm1(x), self.norm1(x), self.norm1(x))
+        x = x + attn_output
         x = x + self.mlp(self.norm2(x))
-        print("transformer block out : ", x.shape)
-        return x
+        return x.permute(1, 0, 2)  # return to (batch, seq_len, embed_dim)
 
 
-# Vision Transformer for Super-Resolution
-# Vision Transformer for Super-Resolution
 class ViTSR(nn.Module):
-    def __init__(self, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim, upscale_factor):
+    def __init__(self, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim, upscale_factor, num_stages=3):
         super().__init__()
+        self.patch_size = patch_size
+        self.embed_dim = embed_dim
+        self.num_stages = num_stages
+
+        # Initial feature extraction
         self.feature_extractor = FeatureExtractor(in_channels, embed_dim, patch_size)
         self.transformer = nn.Sequential(*[TransformerBlock(embed_dim, num_heads, mlp_dim) for _ in range(depth)])
-        total_upscale = patch_size * upscale_factor  # Calculate total upscale factor
-        self.upsample = nn.Sequential(
-            nn.Conv2d(embed_dim, embed_dim * (total_upscale ** 2), kernel_size=3, padding=1),
-            nn.PixelShuffle(total_upscale),
+
+        # Upsampling stages
+        self.stages = nn.ModuleList()
+        for _ in range(num_stages):
+            self.stages.append(nn.Sequential(
+                FeatureExtractor(in_channels, embed_dim, patch_size),
+                nn.Sequential(*[TransformerBlock(embed_dim, num_heads, mlp_dim) for _ in range(depth)]),
+                self._upsample_block(embed_dim, patch_size, upscale_factor)
+            ))
+
+        # Final upsampling to get to target resolution
+        self.final_upsample = nn.Sequential(
+            nn.Conv2d(embed_dim, embed_dim * (upscale_factor ** 2), kernel_size=3, padding=1),
+            nn.PixelShuffle(upscale_factor),
             nn.Conv2d(embed_dim, in_channels, kernel_size=3, padding=1)
         )
 
+    def _upsample_block(self, embed_dim, patch_size, upscale_factor):
+        return nn.Sequential(
+            nn.Conv2d(embed_dim, embed_dim * (upscale_factor ** 2), kernel_size=3, padding=1),
+            nn.PixelShuffle(upscale_factor),
+            nn.Conv2d(embed_dim, 3, kernel_size=3, padding=1)
+        )
+
     def forward(self, x):
+        # Initial feature extraction and transformer
         x = self.feature_extractor(x)
-        print("ViTSR feature extractor output ", x.shape)
         B, C, H, W = x.shape
         x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
-        x = x.permute(1, 0, 2)
-        print("ViTSR extractor output after permutations ", x.shape);
-
         x = self.transformer(x)
-        x = x.permute(1, 2, 0).reshape(B, C, H, W)
-        print("ViTSR extractor output after transformer block and 2nd permutation ", x.shape)
-        x = self.upsample(x)
-        print("ViTSR extractor output after upsample ", x.shape)
+        x = x.reshape(B, H, W, C).permute(0, 3, 1, 2)
+
+        # Process through each stage
+        for stage in self.stages:
+            # Feature extraction
+            x = stage[0](x)
+            B, C, H, W = x.shape
+            x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
+
+            # Transformer
+            x = stage[1](x)
+            x = x.reshape(B, H, W, C).permute(0, 3, 1, 2)
+
+            # Upsampling
+            x = stage[2](x)
+
+        # Final upsampling
+        x = self.final_upsample(x)
         return x
-# Training Setup with Early Stopping
+
+
 def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim,
                 upscale_factor):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -123,14 +152,12 @@ def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, pa
     patience_counter = 0
 
     for epoch in range(num_epochs):
-        print("epoch : ", epoch)
         model.train()
         train_loss = 0.0
         for lr_imgs, hr_imgs in train_loader:
             lr_imgs, hr_imgs = lr_imgs.to(device), hr_imgs.to(device)
             optimizer.zero_grad()
             output = model(lr_imgs)
-            assert output.shape == hr_imgs.shape, f"Shape mismatch! Output: {output.shape}, HR: {hr_imgs.shape}"
             loss = criterion(output, hr_imgs)
             loss.backward()
             optimizer.step()
@@ -174,6 +201,7 @@ if __name__ == "__main__":
     parser.add_argument("--depth", type=int, default=6, help="Number of transformer layers")
     parser.add_argument("--mlp_dim", type=int, default=128, help="MLP hidden layer dimension")
     parser.add_argument("--upscale_factor", type=int, default=2, help="Upscaling factor")
+    parser.add_argument("--num_stages", type=int, default=3, help="Number of stages")
     args = parser.parse_args()
 
     train_model(args.lr_dir, args.hr_dir, args.epochs, args.patience, 3, args.embed_dim, args.patch_size,
