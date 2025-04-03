@@ -8,7 +8,6 @@ import os
 import argparse
 
 
-# Dataset
 class SRDataset(Dataset):
     def __init__(self, lr_dir, hr_dir, upscale_factor, transform_lr=None, transform_hr=None):
         self.lr_dir = lr_dir
@@ -32,7 +31,6 @@ class SRDataset(Dataset):
         return lr_img, hr_img
 
 
-# Feature Extractor
 class FeatureExtractor(nn.Module):
     def __init__(self, in_channels, out_channels, patch_size):
         super().__init__()
@@ -44,7 +42,6 @@ class FeatureExtractor(nn.Module):
         return self.conv(x)
 
 
-# Transformer Block
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim, num_heads, mlp_dim):
         super().__init__()
@@ -58,15 +55,13 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x):
-        # x shape: (batch_size, seq_len, embed_dim)
-        x_attn = x.permute(1, 0, 2)  # (seq_len, batch, embed_dim)
+        x_attn = x.permute(1, 0, 2)
         attn_out, _ = self.attn(self.norm1(x_attn), self.norm1(x_attn), self.norm1(x_attn))
         x = x + attn_out.permute(1, 0, 2)
         x = x + self.mlp(self.norm2(x))
         return x
 
 
-# Vision Transformer SR Model
 class ViTSR(nn.Module):
     def __init__(self, in_channels=3, embed_dim=64, patch_size=4,
                  num_heads=4, depth=6, mlp_dim=128, upscale_factor=2, num_stages=3):
@@ -74,8 +69,8 @@ class ViTSR(nn.Module):
         self.patch_size = patch_size
         self.embed_dim = embed_dim
 
-        # Initial feature extraction
-        self.init_feature = FeatureExtractor(in_channels, embed_dim, patch_size)
+        # Initial feature extraction without downsampling
+        self.init_feature = nn.Conv2d(in_channels, embed_dim, kernel_size=3, padding=1)
 
         # Transformer encoder
         self.transformer = nn.Sequential(*[
@@ -83,14 +78,13 @@ class ViTSR(nn.Module):
             for _ in range(depth)
         ])
 
-        # Processing stages
+        # Upsampling stages
         self.stages = nn.ModuleList()
         for _ in range(num_stages):
             stage = nn.ModuleDict({
-                'feat_extract': FeatureExtractor(embed_dim, embed_dim, patch_size),
                 'transformer': nn.Sequential(*[
                     TransformerBlock(embed_dim, num_heads, mlp_dim)
-                    for _ in range(1)
+                    for _ in range(depth // 2)
                 ]),
                 'upsample': nn.Sequential(
                     nn.Conv2d(embed_dim, embed_dim * (upscale_factor ** 2), 3, padding=1),
@@ -100,53 +94,45 @@ class ViTSR(nn.Module):
             })
             self.stages.append(stage)
 
-        # Final reconstruction
+        # Final upsampling to target resolution
         self.final_upsample = nn.Sequential(
-            nn.Conv2d(embed_dim, embed_dim * (upscale_factor ** 2), 3, padding=1),
-            nn.PixelShuffle(upscale_factor),
             nn.Conv2d(embed_dim, in_channels, 3, padding=1)
         )
 
     def forward(self, x):
-        # Initial features
+        # Initial feature extraction
         x = self.init_feature(x)
-        B, C, H, W = x.shape
 
         # Transformer processing
+        B, C, H, W = x.shape
         x = x.permute(0, 2, 3, 1).view(B, H * W, C)
         x = self.transformer(x)
         x = x.view(B, H, W, C).permute(0, 3, 1, 2)
 
-        # Multi-stage processing
+        # Upsampling stages
         for stage in self.stages:
-            # Feature extraction
-            x = stage['feat_extract'](x)
-
             # Transformer
             B, C, H, W = x.shape
             x = x.permute(0, 2, 3, 1).view(B, H * W, C)
             x = stage['transformer'](x)
             x = x.view(B, H, W, C).permute(0, 3, 1, 2)
 
-            # Upsampling
+            # Upsample
             x = stage['upsample'](x)
 
-        # Final upsampling
+        # Final convolution to RGB
         return self.final_upsample(x)
 
 
-# Training function
 def train_model(lr_dir, hr_dir, epochs, patience, in_channels, embed_dim,
                 patch_size, num_heads, depth, mlp_dim, upscale_factor):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Model and optimizer
     model = ViTSR(in_channels, embed_dim, patch_size, num_heads, depth,
                   mlp_dim, upscale_factor).to(device)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     criterion = nn.L1Loss()
 
-    # Data transforms
     lr_size = 128 // upscale_factor
     hr_size = 128
 
@@ -160,7 +146,6 @@ def train_model(lr_dir, hr_dir, epochs, patience, in_channels, embed_dim,
         transforms.ToTensor()
     ])
 
-    # Dataset and loaders
     dataset = SRDataset(lr_dir, hr_dir, upscale_factor, transform_lr, transform_hr)
     train_size = int(0.8 * len(dataset))
     train_set, val_set = torch.utils.data.random_split(dataset, [train_size, len(dataset) - train_size])
@@ -168,7 +153,6 @@ def train_model(lr_dir, hr_dir, epochs, patience, in_channels, embed_dim,
     train_loader = DataLoader(train_set, batch_size=16, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=16, shuffle=False)
 
-    # Training loop
     best_loss = float('inf')
     patience_cnt = 0
 
@@ -185,7 +169,6 @@ def train_model(lr_dir, hr_dir, epochs, patience, in_channels, embed_dim,
             optimizer.step()
             train_loss += loss.item()
 
-        # Validation
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -194,14 +177,12 @@ def train_model(lr_dir, hr_dir, epochs, patience, in_channels, embed_dim,
                 output = model(lr)
                 val_loss += criterion(output, hr).item()
 
-        # Calculate metrics
         train_loss /= len(train_loader)
         val_loss /= len(val_loader)
 
         print(f"Epoch {epoch + 1}/{epochs}")
         print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
 
-        # Early stopping
         if val_loss < best_loss:
             best_loss = val_loss
             patience_cnt = 0
