@@ -8,7 +8,7 @@ from PIL import Image
 import os
 
 class ConvFeatureExtractor(nn.Module):
-    def __init__(self, in_channels, num_features, num_convs, kernel_size, stride):
+    def __init__(self, in_channels, num_features, num_convs, kernel_size, stride=1):
         super().__init__()
         layers = []
         for i in range(num_convs):
@@ -30,12 +30,13 @@ class ConvFeatureExtractor(nn.Module):
 class EfficientSR(nn.Module):
     def __init__(
         self, in_channels, out_channels, num_features,
-        num_convs, kernel_size, stride,
+        num_convs, kernel_size,
         num_tokens, num_heads, num_layers, upsample_scale
     ):
         super().__init__()
+        # conv extractor always stride=1
         self.extractor = ConvFeatureExtractor(
-            in_channels, num_features, num_convs, kernel_size, stride
+            in_channels, num_features, num_convs, kernel_size, stride=1
         )
         self.class_token = nn.Parameter(torch.randn(1, 1, num_features))
         self.pos_embed = nn.Parameter(
@@ -45,7 +46,8 @@ class EfficientSR(nn.Module):
             d_model=num_features,
             nhead=num_heads,
             dim_feedforward=num_features * 4,
-            activation='gelu'
+            activation='gelu',
+            batch_first=True
         )
         self.transformer = nn.TransformerEncoder(
             encoder_layer, num_layers=num_layers
@@ -114,8 +116,7 @@ def train(args):
         num_features=args.num_features,
         num_convs=args.num_convs,
         kernel_size=args.kernel_size,
-        stride=args.stride,
-        num_tokens=( (args.crop_size // args.stride) ** 2 ),
+        num_tokens=(args.crop_size ** 2),
         num_heads=args.num_heads,
         num_layers=args.num_layers,
         upsample_scale=args.scale
@@ -144,7 +145,6 @@ if __name__ == '__main__':
     parser.add_argument('--num_features', type=int, default=64)
     parser.add_argument('--num_convs', type=int, default=3)
     parser.add_argument('--kernel_size', type=int, default=3)
-    parser.add_argument('--stride', type=int, default=1)
     parser.add_argument('--num_heads', type=int, default=8)
     parser.add_argument('--num_layers', type=int, default=6)
     parser.add_argument('--batch_size', type=int, default=16)
@@ -152,4 +152,5 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--save_path', type=str, default='sr_model.pth')
     args = parser.parse_args()
+    # enforce stride=1 internally
     train(args)
