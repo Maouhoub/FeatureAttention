@@ -10,7 +10,8 @@ from PIL import Image
 import torch.nn.functional as F
 from tqdm import tqdm
 
-# Custom Dataset
+
+# Custom Dataset: Loads HR images from a directory and creates LR images by downsampling
 class ImageSRDataset(Dataset):
     def __init__(self, root_dir, hr_size, upscaling_factor):
         self.hr_size = hr_size
@@ -29,51 +30,59 @@ class ImageSRDataset(Dataset):
         img = Image.open(img_path).convert("RGB")
         hr_image = self.hr_transform(img)
         lr_size = self.hr_size // self.upscaling_factor
-        lr_image = F.interpolate(hr_image.unsqueeze(0), size=(lr_size, lr_size), mode='bilinear', align_corners=False).squeeze(0)
+        lr_image = F.interpolate(hr_image.unsqueeze(0), size=(lr_size, lr_size), mode='bilinear',
+                                 align_corners=False).squeeze(0)
         return lr_image, hr_image
 
-# Model Definition
+
+# Model Definition: Feature Attention Super-Resolution Model
 class FeatureAttentionSR(nn.Module):
     def __init__(self, in_channels=3, num_convs=4, embed_dim=96, num_heads=4, upscaling_factor=2):
         super(FeatureAttentionSR, self).__init__()
-        self.convs = nn.Sequential(*[
-            nn.Conv2d(in_channels if i == 0 else embed_dim, embed_dim, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-            for i in range(num_convs)
-        ])
+        # Build convolution layers using a loop
+        conv_layers = []
+        for i in range(num_convs):
+            conv_layers.append(nn.Conv2d(in_channels if i == 0 else embed_dim, embed_dim, kernel_size=3, padding=1))
+            conv_layers.append(nn.ReLU(inplace=True))
+        self.convs = nn.Sequential(*conv_layers)
 
+        # Multi-head self-attention block
         self.attn = nn.MultiheadAttention(embed_dim, num_heads)
-        self.flatten = nn.Flatten(2)
-        self.unflatten = lambda x, h, w: x.view(x.size(0), -1, h, w)
-
+        # Transformer encoder layer for patch tokens
         self.transformer_block = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads)
 
+        # Reconstruction and upsampling
         self.reconstruct = nn.Conv2d(embed_dim, in_channels * (upscaling_factor ** 2), kernel_size=3, padding=1)
         self.upsample = nn.PixelShuffle(upscaling_factor)
 
     def forward(self, x):
-        skip = x
+        # Apply convolutional layers
         x = self.convs(x)
-
         b, c, h, w = x.shape
-        tokens = self.flatten(x).permute(2, 0, 1)  # (seq_len, batch, embed_dim)
+
+        # Prepare tokens for attention: reshape to (sequence length, batch, embed_dim)
+        tokens = x.flatten(2).permute(2, 0, 1)
         attn_out, _ = self.attn(tokens, tokens, tokens)
+        # Reshape attention output back to feature maps
         attn_out = attn_out.permute(1, 2, 0).view(b, c, h, w)
 
+        # Add skip connection and process with transformer block
         x = x + attn_out
-        x = x.flatten(2).permute(2, 0, 1)
-        x = self.transformer_block(x)
-        x = x.permute(1, 2, 0).view(b, c, h, w)
+        tokens = x.flatten(2).permute(2, 0, 1)
+        tokens = self.transformer_block(tokens)
+        x = tokens.permute(1, 2, 0).view(b, c, h, w)
 
+        # Reconstruction and upsampling
         x = self.reconstruct(x)
         x = self.upsample(x)
         return x
 
-# Training function
+
+# Training function for one epoch
 def train_one_epoch(model, dataloader, criterion, optimizer, device):
     model.train()
     running_loss = 0.0
-    for lr_images, hr_images in tqdm(dataloader):
+    for lr_images, hr_images in tqdm(dataloader, desc="Training", leave=False):
         lr_images, hr_images = lr_images.to(device), hr_images.to(device)
         optimizer.zero_grad()
         outputs = model(lr_images)
@@ -82,6 +91,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device):
         optimizer.step()
         running_loss += loss.item()
     return running_loss / len(dataloader)
+
 
 # Validation function
 def validate(model, dataloader, criterion, device):
@@ -95,10 +105,12 @@ def validate(model, dataloader, criterion, device):
             val_loss += loss.item()
     return val_loss / len(dataloader)
 
-# Main function
+
+# Main function: sets up dataset, model, and training loop with early stopping
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Create training and validation datasets
     train_dataset = ImageSRDataset(args.train_dir, args.hr_size, args.upscaling_factor)
     val_dataset = ImageSRDataset(args.val_dir, args.hr_size, args.upscaling_factor)
 
@@ -117,39 +129,38 @@ def main(args):
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     best_val_loss = float('inf')
-    patience, counter = args.patience, 0
+    patience_counter = 0
 
     for epoch in range(args.epochs):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_loss = validate(model, val_loader, criterion, device)
-
-        print(f"Epoch {epoch+1}/{args.epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
+        print(f"Epoch {epoch + 1}/{args.epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            counter = 0
+            patience_counter = 0
             torch.save(model.state_dict(), args.save_path)
         else:
-            counter += 1
-            if counter >= patience:
+            patience_counter += 1
+            if patience_counter >= args.patience:
                 print("Early stopping triggered")
                 break
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--train_dir", type=str, required=True, help="Path to training HR images")
     parser.add_argument("--val_dir", type=str, required=True, help="Path to validation HR images")
-    parser.add_argument("--hr_size", type=int, default=128)
-    parser.add_argument("--upscaling_factor", type=int, default=2)
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--embed_dim", type=int, default=96)
-    parser.add_argument("--num_heads", type=int, default=4)
-    parser.add_argument("--num_convs", type=int, default=4)
-    parser.add_argument("--patience", type=int, default=10)
-    parser.add_argument("--save_path", type=str, default="best_model.pth")
+    parser.add_argument("--hr_size", type=int, default=128, help="High-resolution image size")
+    parser.add_argument("--upscaling_factor", type=int, default=2, help="Upscaling factor for super-resolution")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size for training")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for optimizer")
+    parser.add_argument("--embed_dim", type=int, default=96, help="Embedding dimension for conv and transformer")
+    parser.add_argument("--num_heads", type=int, default=4, help="Number of heads in multi-head attention")
+    parser.add_argument("--num_convs", type=int, default=4, help="Number of convolutional layers")
+    parser.add_argument("--patience", type=int, default=10, help="Patience for early stopping")
+    parser.add_argument("--save_path", type=str, default="best_model.pth", help="Path to save the best model")
 
     args = parser.parse_args()
-
     main(args)
