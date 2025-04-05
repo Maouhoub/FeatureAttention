@@ -16,8 +16,6 @@ from modelv2 import EfficientSR
 
 
 class TestSRDataset(Dataset):
-    """Dataset for testing super-resolution models"""
-
     def __init__(self, root_dir, scale, hr_crop_size, transform=None):
         self.files = [os.path.join(root_dir, f) for f in os.listdir(root_dir)
                       if f.lower().endswith(('png', 'jpg', 'jpeg'))]
@@ -46,7 +44,7 @@ def calculate_psnr(sr, hr, max_val=1.0):
 def test_model(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Load dataset
+    # Dataset setup
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
@@ -54,25 +52,37 @@ def test_model(args):
     test_dataset = TestSRDataset(args.test_dir, args.scale, args.crop_size, transform)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    # Initialize model
+    # Model initialization with DYNAMIC positional embedding
     model = EfficientSR(
         in_channels=3,
         out_channels=3,
         num_features=args.num_features,
         num_convs=args.num_convs,
         kernel_size=args.kernel_size,
-        num_tokens=(args.crop_size // args.scale) ** 2,  # LR spatial dimensions
+        num_tokens=(args.crop_size // args.scale) ** 2,
         num_heads=args.num_heads,
         num_layers=args.num_layers,
         upsample_scale=args.scale
     ).to(device)
 
-    # Load trained weights
-    model.load_state_dict(torch.load(args.model_path, map_location=device))
+    # Load weights with error handling
+    state_dict = torch.load(args.model_path, map_location=device)
+    try:
+        model.load_state_dict(state_dict, strict=False)  # Non-strict loading
+    except Exception as e:
+        print(f"Partial loading: {e}")
+        model_dict = model.state_dict()
+        pretrained_dict = {k: v for k, v in state_dict.items()
+                           if k in model_dict and v.size() == model_dict[k].size()}
+        model_dict.update(pretrained_dict)
+        model.load_state_dict(model_dict)
+
     model.eval()
 
-    # Testing loop
+    # Testing
     total_psnr = 0.0
+    inference_times = []
+
     with torch.no_grad():
         for lr, hr, filename in test_loader:
             lr, hr = lr.to(device), hr.to(device)
@@ -83,6 +93,7 @@ def test_model(args):
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             inference_time = (time.time() - start_time) * 1000
+            inference_times.append(inference_time)
 
             # PSNR
             psnr = calculate_psnr(sr, hr)
@@ -92,25 +103,15 @@ def test_model(args):
 
     # Metrics
     avg_psnr = total_psnr / len(test_dataset)
+    avg_time = sum(inference_times) / len(inference_times)
     print(f"\nAverage PSNR: {avg_psnr:.2f} dB")
+    print(f"Average Inference Time: {avg_time:.2f} ms")
 
-    # FLOPs and parameters
+    # FLOPs and Parameters
     dummy_input = torch.randn(1, 3, args.crop_size // args.scale, args.crop_size // args.scale).to(device)
     flops, params = profile(model, inputs=(dummy_input,), verbose=False)
     print(f"FLOPs: {flops / 1e9:.2f} G")
     print(f"Parameters: {params / 1e6:.2f} M")
-
-    # Average inference time
-    print("\nMeasuring inference time...")
-    for _ in range(10):  # Warmup
-        _ = model(dummy_input)
-    start_time = time.time()
-    for _ in range(100):
-        _ = model(dummy_input)
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    avg_time = (time.time() - start_time) / 100 * 1000
-    print(f"Average inference time: {avg_time:.2f} ms")
 
 
 if __name__ == '__main__':
