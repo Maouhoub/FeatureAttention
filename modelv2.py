@@ -1,7 +1,6 @@
 import argparse
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from PIL import Image
@@ -107,8 +106,13 @@ class SRDataset(Dataset):
 def train(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     transform = transforms.ToTensor()
-    dataset = SRDataset(args.data_dir, args.scale, args.crop_size, transform)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+    # split dataset into train/val
+    full_dataset = SRDataset(args.data_dir, args.scale, args.crop_size, transform)
+    val_size = int(len(full_dataset) * args.val_split)
+    train_size = len(full_dataset) - val_size
+    train_ds, val_ds = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
 
     model = EfficientSR(
         in_channels=3,
@@ -124,18 +128,44 @@ def train(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.L1Loss()
 
-    for epoch in range(args.epochs):
-        for lr, hr in loader:
+    best_val = float('inf')
+    epochs_no_improve = 0
+
+    for epoch in range(1, args.epochs + 1):
+        model.train()
+        train_loss = 0.0
+        for lr, hr in train_loader:
             lr, hr = lr.to(device), hr.to(device)
             sr = model(lr)
             loss = criterion(sr, hr)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        print(f"Epoch {epoch+1}/{args.epochs}, Loss: {loss.item():.4f}")
+            train_loss += loss.item() * lr.size(0)
+        train_loss /= train_size
 
-    torch.save(model.state_dict(), args.save_path)
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for lr, hr in val_loader:
+                lr, hr = lr.to(device), hr.to(device)
+                sr = model(lr)
+                loss = criterion(sr, hr)
+                val_loss += loss.item() * lr.size(0)
+        val_loss /= val_size
 
+        print(f"Epoch {epoch}/{args.epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+
+        # early stopping
+        if val_loss < best_val:
+            best_val = val_loss
+            epochs_no_improve = 0
+            torch.save(model.state_dict(), args.save_path)
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= args.patience:
+                print(f"Early stopping at epoch {epoch}. Best Val Loss: {best_val:.4f}")
+                break
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -150,7 +180,10 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--patience', type=int, default=5,
+                        help='Early stopping patience in epochs')
+    parser.add_argument('--val_split', type=float, default=0.1,
+                        help='Fraction of data for validation')
     parser.add_argument('--save_path', type=str, default='sr_model.pth')
     args = parser.parse_args()
-    # enforce stride=1 internally
     train(args)
