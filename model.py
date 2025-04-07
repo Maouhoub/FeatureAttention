@@ -58,10 +58,10 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x):
-        print("transformer block in : ", x.shape)
+        #print("transformer block in : ", x.shape)
         x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
         x = x + self.mlp(self.norm2(x))
-        print("transformer block out : ", x.shape)
+        #print("transformer block out : ", x.shape)
         return x
 
 
@@ -81,17 +81,17 @@ class ViTSR(nn.Module):
 
     def forward(self, x):
         x = self.feature_extractor(x)
-        print("ViTSR feature extractor output ", x.shape)
+        #print("ViTSR feature extractor output ", x.shape)
         B, C, H, W = x.shape
         x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
         x = x.permute(1, 0, 2)
-        print("ViTSR extractor output after permutations ", x.shape);
+        #print("ViTSR extractor output after permutations ", x.shape);
 
         x = self.transformer(x)
         x = x.permute(1, 2, 0).reshape(B, C, H, W)
-        print("ViTSR extractor output after transformer block and 2nd permutation ", x.shape)
+        #print("ViTSR extractor output after transformer block and 2nd permutation ", x.shape)
         x = self.upsample(x)
-        print("ViTSR extractor output after upsample ", x.shape)
+        #print("ViTSR extractor output after upsample ", x.shape)
         return x
 # Training Setup with Early Stopping
 def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim,
