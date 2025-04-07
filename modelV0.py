@@ -1,5 +1,13 @@
+import argparse
+
 import torch
 import torch.nn as nn
+from torch import optim
+from torch.utils.data import DataLoader
+from torchvision.transforms import transforms
+
+from model import SRDataset
+
 
 class ResidualBlock(nn.Module):
     def __init__(self, channels):
@@ -64,3 +72,84 @@ class LightweightModel(nn.Module):
         # Upsampling
         x = self.upsample(x)
         return x
+
+def train_model(args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = args.device if args.device else 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Initialize model
+    model = LightweightModel(
+        n_layers=args.n_layers,
+        upscale_factor=args.scale,
+        attn_heads=args.attn_heads,
+        base_channels=args.base_channels
+    ).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.L1Loss()
+
+    lr_transform = transforms.Compose([
+        transforms.Resize((128 // args.scale, 128 // args.scale)),
+        transforms.ToTensor()
+    ])
+
+    hr_transform = transforms.Compose([
+        transforms.Resize((128, 128)),
+        transforms.ToTensor()
+    ])
+
+    dataset = SRDataset(args.train_hr_dir, args.train_lr_dir, args.scale, lr_transform, hr_transform)
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+
+    best_val_loss = float('inf')
+    patience_counter = 0
+
+    for epoch in range(args.epochs):
+        print("epoch : ", epoch)
+        model.train()
+        train_loss = 0.0
+        for lr_imgs, hr_imgs in train_loader:
+            lr_imgs, hr_imgs = lr_imgs.to(device), hr_imgs.to(device)
+            optimizer.zero_grad()
+            output = model(lr_imgs)
+            assert output.shape == hr_imgs.shape, f"Shape mismatch! Output: {output.shape}, HR: {hr_imgs.shape}"
+            loss = criterion(output, hr_imgs)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+
+        # Validation
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for lr_imgs, hr_imgs in val_loader:
+                lr_imgs, hr_imgs = lr_imgs.to(device), hr_imgs.to(device)
+                output = model(lr_imgs)
+                loss = criterion(output, hr_imgs)
+                val_loss += loss.item()
+
+        train_loss /= len(train_loader)
+        val_loss /= len(val_loader)
+        print(f"Epoch {epoch + 1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+
+        # Early stopping
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            torch.save(model.state_dict(), "best_model.pth")
+        else:
+            patience_counter += 1
+            if patience_counter >= args.patience:
+                print("Early stopping triggered.")
+                break
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    args = parser.parse_args()
+
+    train_model(args)
