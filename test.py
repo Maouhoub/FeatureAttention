@@ -42,7 +42,7 @@ def evaluate_model(model, lr_dir, hr_dir, upscale_factor, device, repetitions=10
     # Process images
     for img_name in os.listdir(lr_dir):
         lr_path = os.path.join(lr_dir, img_name)
-        hr_path = os.path.join(hr_dir, img_name)
+        hr_path = os.path.join(hr_dir, img_name).replace("LR", 'HR')
 
         lr_img = Image.open(lr_path).convert("RGB")
         hr_img = Image.open(hr_path).convert("RGB")
