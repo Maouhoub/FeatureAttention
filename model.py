@@ -38,79 +38,41 @@ class SRDataset(Dataset):
 class FeatureExtractor(nn.Module):
     def __init__(self, in_channels, embed_dim, patch_size):
         super().__init__()
-        self.conv = nn.Conv2d(in_channels, embed_dim,
-                              kernel_size=patch_size, stride=patch_size)
+        self.conv = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
         return self.conv(x)
 
 
-# Transformer Encoder Block with modified attention (K = V = X, Q learnable)
+# Transformer Encoder Block
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim, num_heads, mlp_dim):
         super().__init__()
         self.norm1 = nn.LayerNorm(embed_dim)
-        self.embed_dim = embed_dim
-        self.num_heads = num_heads
-        self.head_dim = embed_dim // num_heads
-
-        # Learnable query projection
-        self.query_proj = nn.Linear(embed_dim, embed_dim)
-
-        # Output projection
-        self.out_proj = nn.Linear(embed_dim, embed_dim)
-
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.mlp = nn.Sequential(
             nn.Linear(embed_dim, mlp_dim),
             nn.GELU(),
             nn.Linear(mlp_dim, embed_dim)
         )
-        self.scale = self.head_dim ** -0.5
 
     def forward(self, x):
-        # x shape: (S, B, E) - sequence first for transformer
-        x_input = x  # Save original input for K and V
-        x_norm = self.norm1(x)  # (S, B, E)
-
-        # Project queries (learnable)
-        q = self.query_proj(x_norm)  # (S, B, E)
-
-        # Convert to batch-first for attention computation
-        q = q.permute(1, 0, 2)  # (B, S, E)
-        k = x_input.permute(1, 0, 2)  # (B, S, E)
-        v = x_input.permute(1, 0, 2)  # (B, S, E)
-
-        # Reshape for multi-head attention
-        B, S, _ = q.shape
-        q = q.reshape(B, S, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-        k = k.reshape(B, S, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-        v = v.reshape(B, S, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-
-        # Scaled dot-product attention
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        out = (attn @ v)  # (B, nh, S, hd)
-
-        # Combine heads and return to sequence-first
-        out = out.transpose(1, 2).reshape(B, S, self.embed_dim)
-        out = self.out_proj(out).permute(1, 0, 2)  # (S, B, E)
-
-        # Residual connection
-        x = x_input + out
-
-        # MLP part
+        print("transformer block in : ", x.shape)
+        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
         x = x + self.mlp(self.norm2(x))
+        print("transformer block out : ", x.shape)
         return x
 
 
+# Vision Transformer for Super-Resolution
 # Vision Transformer for Super-Resolution
 class ViTSR(nn.Module):
     def __init__(self, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim, upscale_factor):
         super().__init__()
         self.feature_extractor = FeatureExtractor(in_channels, embed_dim, patch_size)
         self.transformer = nn.Sequential(*[TransformerBlock(embed_dim, num_heads, mlp_dim) for _ in range(depth)])
-        total_upscale = patch_size * upscale_factor
+        total_upscale = patch_size * upscale_factor  # Calculate total upscale factor
         self.upsample = nn.Sequential(
             nn.Conv2d(embed_dim, embed_dim * (total_upscale ** 2), kernel_size=3, padding=1),
             nn.PixelShuffle(total_upscale),
@@ -118,59 +80,57 @@ class ViTSR(nn.Module):
         )
 
     def forward(self, x):
-        # Feature extraction
-        x = self.feature_extractor(x)  # (B, C, H, W)
-
-        # Prepare for transformer
+        x = self.feature_extractor(x)
+        print("ViTSR feature extractor output ", x.shape)
         B, C, H, W = x.shape
-        x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)  # (B, S, E)
-        x = x.permute(1, 0, 2)  # (S, B, E) for transformer
+        x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
+        x = x.permute(1, 0, 2)
+        print("ViTSR extractor output after permutations ", x.shape);
 
-        # Transformer layers
         x = self.transformer(x)
-
-        # Prepare for upsampling
         x = x.permute(1, 2, 0).reshape(B, C, H, W)
-        return self.upsample(x)
-
-
+        print("ViTSR extractor output after transformer block and 2nd permutation ", x.shape)
+        x = self.upsample(x)
+        print("ViTSR extractor output after upsample ", x.shape)
+        return x
 # Training Setup with Early Stopping
-def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim,
-                patch_size, num_heads, depth, mlp_dim, upscale_factor):
+def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim,
+                upscale_factor):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ViTSR(in_channels, embed_dim, patch_size, num_heads, depth, mlp_dim, upscale_factor).to(device)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     criterion = nn.L1Loss()
 
-    # Data transformations
     lr_transform = transforms.Compose([
         transforms.Resize((128 // upscale_factor, 128 // upscale_factor)),
         transforms.ToTensor()
     ])
+
     hr_transform = transforms.Compose([
         transforms.Resize((128, 128)),
         transforms.ToTensor()
     ])
 
-    # Dataset and loaders
     dataset = SRDataset(lr_dir, hr_dir, upscale_factor, lr_transform, hr_transform)
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
 
-    # Training loop
     best_val_loss = float('inf')
     patience_counter = 0
 
     for epoch in range(num_epochs):
+        print("epoch : ", epoch)
         model.train()
         train_loss = 0.0
         for lr_imgs, hr_imgs in train_loader:
             lr_imgs, hr_imgs = lr_imgs.to(device), hr_imgs.to(device)
             optimizer.zero_grad()
             output = model(lr_imgs)
+            assert output.shape == hr_imgs.shape, f"Shape mismatch! Output: {output.shape}, HR: {hr_imgs.shape}"
             loss = criterion(output, hr_imgs)
             loss.backward()
             optimizer.step()
@@ -183,12 +143,12 @@ def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim,
             for lr_imgs, hr_imgs in val_loader:
                 lr_imgs, hr_imgs = lr_imgs.to(device), hr_imgs.to(device)
                 output = model(lr_imgs)
-                val_loss += criterion(output, hr_imgs).item()
+                loss = criterion(output, hr_imgs)
+                val_loss += loss.item()
 
-        # Epoch statistics
         train_loss /= len(train_loader)
         val_loss /= len(val_loader)
-        print(f"Epoch {epoch + 1}/{num_epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        print(f"Epoch {epoch + 1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
 
         # Early stopping
         if val_loss < best_val_loss:
@@ -198,12 +158,12 @@ def train_model(lr_dir, hr_dir, num_epochs, patience, in_channels, embed_dim,
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                print("Early stopping triggered")
+                print("Early stopping triggered.")
                 break
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ViT Super-Resolution Training")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--lr_dir", type=str, required=True, help="Path to low-resolution images")
     parser.add_argument("--hr_dir", type=str, required=True, help="Path to high-resolution images")
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
@@ -212,17 +172,9 @@ if __name__ == "__main__":
     parser.add_argument("--embed_dim", type=int, default=64, help="Embedding dimension")
     parser.add_argument("--num_heads", type=int, default=4, help="Number of attention heads")
     parser.add_argument("--depth", type=int, default=6, help="Number of transformer layers")
-    parser.add_argument("--mlp_dim", type=int, default=128, help="MLP dimension")
+    parser.add_argument("--mlp_dim", type=int, default=128, help="MLP hidden layer dimension")
     parser.add_argument("--upscale_factor", type=int, default=2, help="Upscaling factor")
     args = parser.parse_args()
 
-    train_model(
-        args.lr_dir, args.hr_dir, args.epochs, args.patience,
-        in_channels=3,
-        embed_dim=args.embed_dim,
-        patch_size=args.patch_size,
-        num_heads=args.num_heads,
-        depth=args.depth,
-        mlp_dim=args.mlp_dim,
-        upscale_factor=args.upscale_factor
-    )
+    train_model(args.lr_dir, args.hr_dir, args.epochs, args.patience, 3, args.embed_dim, args.patch_size,
+                args.num_heads, args.depth, args.mlp_dim, args.upscale_factor)
