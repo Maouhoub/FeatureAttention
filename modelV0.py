@@ -150,6 +150,21 @@ def train_model(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    args = parser.parse_args()
 
+    parser.add_argument('--train_hr_dir', type=str, required=True)
+    parser.add_argument('--train_lr_dir', type=str, required=True)
+    parser.add_argument('--val_hr_dir', type=str, required=True)
+    parser.add_argument('--val_lr_dir', type=str, required=True)
+    parser.add_argument('--scale', type=int, default=2, choices=[2, 3, 4])
+    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--n_layers', type=int, default=5)
+    parser.add_argument('--attn_heads', type=int, default=4)
+    parser.add_argument('--base_channels', type=int, default=32)
+    parser.add_argument('--patience', type=int, default=10)
+    parser.add_argument('--save_path', type=str, default='best_model.pth')
+    parser.add_argument('--device', type=str, default=None)
+    parser.add_argument('--crop_size', type=int, default=128)
+    args = parser.parse_args()
     train_model(args)
