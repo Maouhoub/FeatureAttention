@@ -9,12 +9,13 @@ from torchvision.transforms import transforms
 
 # Import the dataset. Ensure SRDataset is defined in model.py (or adjust the path accordingly).
 from model import SRDataset
+from modelV0 import LightweightModel
 
 # Import the model.
 # If your LightweightModel class is defined in a separate module, import it accordingly.
 # For this example we assume it is defined in the training script or in another module.
 # Otherwise, you can copy the class definition into this file.
-from training_script import LightweightModel  # Adjust if necessary
+
 
 try:
     from ptflops import get_model_complexity_info
